@@ -1,43 +1,15 @@
-import torch
-import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import torch.optim as optim
+import torch
 import torch.nn as nn
+import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
-df = pd.read_csv(r"C:\Users\Mehreen\Documents\GitHub\AI\__pycache__\employes.csv")
-df = df.dropna()
-print(df)
-print(df.shape)
-print(df.columns.tolist())
+st.set_page_config(page_title="Salary Predictor", layout="wide")
+st.title("💼 Salary Prediction — Neural Network")
 
-target_column = "salary"
-X = df.drop(columns=[target_column])
-Y = df[target_column].to_numpy(dtype=np.float64)
-
-for col in X.select_dtypes(include=['object', 'str']):
-    le = LabelEncoder()
-    X[col] = le.fit_transform(X[col])
-
-scalar = StandardScaler()
-X_scaled = scalar.fit_transform(X)
-
-Y_scaler = StandardScaler()
-Y_scaled = Y_scaler.fit_transform(Y.reshape(-1, 1)).flatten()
-
-X_train, X_test, Y_train, Y_test = train_test_split(
-    X_scaled, Y_scaled,        # <-- fixed: Y_scaled, not Y
-    test_size=0.2,
-    random_state=42,
-)
-
-X_train_t = torch.tensor(X_train, dtype=torch.float32)
-X_test_t = torch.tensor(X_test, dtype=torch.float32)
-Y_train_t = torch.tensor(Y_train, dtype=torch.float32)
-Y_test_t = torch.tensor(Y_test, dtype=torch.float32)
 
 class NeuralNetwork(nn.Module):
     def __init__(self, input_size):
@@ -54,115 +26,169 @@ class NeuralNetwork(nn.Module):
         x = self.fc3(x)
         return x
 
-model = NeuralNetwork(input_size=X_train_t.shape[1])
 
-fn = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+# ---- 1. File upload ----
+uploaded_file = st.file_uploader("Apload your CSV", type=["csv"])
 
-epochs = 2000
-for epoch in range(epochs):
-    model.train()
-    optimizer.zero_grad()
-    outputs = model(X_train_t).squeeze()
-    loss = fn(outputs, Y_train_t)
-    loss.backward()
-    optimizer.step()
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    df = df.dropna()
 
-    if (epoch+1) % 10 == 0:
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+    st.subheader("Data Preview")
+    st.dataframe(df.head(100))
+    st.write(f"Shape: {df.shape}")
 
-model.eval()
-with torch.no_grad():
-    predictions_scaled = model(X_test_t).squeeze()
-    predictions_original = Y_scaler.inverse_transform(predictions_scaled.numpy().reshape(-1, 1))
-    actual_original = Y_scaler.inverse_transform(Y_test_t.numpy().reshape(-1, 1))
+    target_column = "salary"
+    if target_column not in df.columns:
+        st.error(f"'{target_column}' column is not in the csv.file. Columns: {df.columns.tolist()}")
+        st.stop()
 
-    print("\n--- Sample Predictions vs Actual ---")
-    for pred, actual in list(zip(predictions_original.flatten(), actual_original.flatten()))[:15]:
-        diff = abs(pred - actual)
-        print(f"Predicted: {pred:,.0f}   |   Actual: {actual:,.0f}   |   Difference: {diff:,.0f}")
+    # Columns jo unique identifiers hain (Name, Email, Phone Number waghera) —
+    # inka salary se koi meaningful relation nahi hota, isliye model se bahar rakhein.
+    id_like_columns = st.multiselect(
+        "Columns need to be ignored (like Name, Email, Number)?",
+        options=[c for c in df.columns if c != target_column],
+        default=[c for c in ["Name", "Email", "Number"] if c in df.columns],
+    )
 
-torch.save(model.state_dict(),r"C:\Users\Mehreen\Documents\GitHub\AI\__pycache__\employes.csv")
-print("model saved")
+    X = df.drop(columns=[target_column] + id_like_columns)
+    Y = df[target_column].to_numpy(dtype=np.float64)
 
+    # ---- Encode categorical columns, keep encoders for later use ----
+    encoders = {}
+    for col in X.select_dtypes(include=['object', 'str']):
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col])
+        encoders[col] = le
 
+    scalar = StandardScaler()
+    X_scaled = scalar.fit_transform(X)
 
-####  relaoad model again
-import torch
-import torch.nn as nn
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+    Y_scaler = StandardScaler()
+    Y_scaled = Y_scaler.fit_transform(Y.reshape(-1, 1)).flatten()
 
-# ============================================
-# STEP 1: Wahi preprocessing setup jo training mein tha
-# (Zaroori hai kyunke naye data ko bhi usi tarah scale karna hai)
-# ============================================
-df = pd.read_csv(r"C:\Users\Mehreen\Documents\GitHub\AI\__pycache__\employes.csv")
-df = df.dropna()
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X_scaled, Y_scaled, test_size=0.2, random_state=42
+    )
 
-target_column = "salary"
-X = df.drop(columns=[target_column])
-Y = df[target_column].to_numpy(dtype=np.float64)
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    X_test_t = torch.tensor(X_test, dtype=torch.float32)
+    Y_train_t = torch.tensor(Y_train, dtype=torch.float32)
+    Y_test_t = torch.tensor(Y_test, dtype=torch.float32)
 
-for col in X.select_dtypes(include=['object', 'str']):
-    le = LabelEncoder()
-    X[col] = le.fit_transform(X[col])
+    # ---- 2. Sidebar controls ----
+    st.sidebar.header("Training Settings")
+    epochs = st.sidebar.slider("Epochs", 100, 5000, 2000, step=100)
+    lr = st.sidebar.select_slider("Learning Rate", options=[0.0001, 0.001, 0.01], value=0.001)
 
-scalar = StandardScaler()
-scalar.fit(X)          # sirf fit karna hai, transform training data pe nahi karna
+    if st.button("🚀 Train Model"):
+        model = NeuralNetwork(input_size=X_train_t.shape[1])
+        fn = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=lr)
 
-Y_scaler = StandardScaler()
-Y_scaler.fit(Y.reshape(-1, 1))
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        chart_placeholder = st.empty()
+        losses = []
 
-# ============================================
-# STEP 2: Wahi model architecture dobara define karein
-# (PyTorch ko pata hona chahiye model ka structure kya hai)
-# ============================================
-class NeuralNetwork(nn.Module):
-    def __init__(self, input_size):
-        super(NeuralNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_size, 64)
-        self.r1 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 32)
-        self.r2 = nn.ReLU()
-        self.fc3 = nn.Linear(32, 1)
+        for epoch in range(epochs):
+            model.train()
+            optimizer.zero_grad()
+            outputs = model(X_train_t).squeeze()
+            loss = fn(outputs, Y_train_t)
+            loss.backward()
+            optimizer.step()
 
-    def forward(self, x):
-        x = self.r1(self.fc1(x))
-        x = self.r2(self.fc2(x))
-        x = self.fc3(x)
-        return x
+            if (epoch + 1) % 10 == 0:
+                losses.append(loss.item())
+                progress_bar.progress((epoch + 1) / epochs)
+                status_text.text(f"Epoch [{epoch+1}/{epochs}] — Loss: {loss.item():.4f}")
+                chart_placeholder.line_chart(losses)
 
-# ============================================
-# STEP 3: Saved model load karein
-# ============================================
-model = NeuralNetwork(input_size=X.shape[1])
-model.load_state_dict(torch.load(r"C:\Users\Mehreen\Documents\GitHub\AI\salary_model.pth"))
-model.eval()
-print("Model loaded successfully!")
+        st.success("Training complete ✅")
 
-# ============================================
-# STEP 4: Naye insaan ki salary predict karein
-# ============================================
-new_person = pd.DataFrame({
-    'Name': ['Ahmed'],
-    'Age': [35],
-    'Number': [3123456789],
-    'Email': ['ahmed@gmail.com'],
-    'duration': [60],
-    'year': [2022],
-    'month': [5]
-})
+        # ---- 3. Evaluation on test set ----
+        model.eval()
+        with torch.no_grad():
+            predictions_scaled = model(X_test_t).squeeze()
+            predictions_original = Y_scaler.inverse_transform(
+                predictions_scaled.numpy().reshape(-1, 1)
+            )
+            actual_original = Y_scaler.inverse_transform(
+                Y_test_t.numpy().reshape(-1, 1)
+            )
 
-for col in new_person.select_dtypes(include=['object', 'str']):
-    le = LabelEncoder()
-    new_person[col] = le.fit_transform(new_person[col])
+        st.subheader("Predictions vs Actual (sample)")
+        results_df = pd.DataFrame({
+            "Predicted": predictions_original.flatten()[:15],
+            "Actual": actual_original.flatten()[:15],
+        })
+        results_df["Difference"] = (results_df["Predicted"] - results_df["Actual"]).abs()
+        st.dataframe(results_df.style.format("{:,.0f}"))
 
-new_scaled = scalar.transform(new_person)
-new_tensor = torch.tensor(new_scaled, dtype=torch.float32)
+        # ---- 4. Save everything needed for new predictions later ----
+        st.session_state["model"] = model
+        st.session_state["scalar"] = scalar
+        st.session_state["Y_scaler"] = Y_scaler
+        st.session_state["encoders"] = encoders
+        st.session_state["feature_columns"] = X.columns.tolist()
+        st.session_state["trained"] = True
 
-with torch.no_grad():
-    pred_scaled = model(new_tensor).squeeze()
-    pred_salary = Y_scaler.inverse_transform(pred_scaled.numpy().reshape(-1, 1))
-    print(f"Predicted Salary: {pred_salary[0][0]:,.0f}")
+        model_path = "employes_model.pth"
+        torch.save(model.state_dict(), model_path)
+        with open(model_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Trained Model (.pth)",
+                data=f,
+                file_name="employes_model.pth",
+            )
+
+    # ---- 5. Predict salary for a NEW employee ----
+    if st.session_state.get("trained"):
+        st.divider()
+        st.subheader("🔮 Naye Employee ki Salary Predict Karein")
+
+        feature_columns = st.session_state["feature_columns"]
+        encoders = st.session_state["encoders"]
+
+        with st.form("predict_form"):
+            new_data = {}
+            for col in feature_columns:
+                if col in encoders:
+                    # categorical column -> dropdown of known categories
+                    options = list(encoders[col].classes_)
+                    new_data[col] = st.selectbox(col, options)
+                else:
+                    # numeric column -> number input
+                    default_val = float(df[col].mean())
+                    new_data[col] = st.number_input(col, value=default_val)
+
+            submitted = st.form_submit_button("Predict Salary")
+
+        if submitted:
+            model = st.session_state["model"]
+            scalar = st.session_state["scalar"]
+            Y_scaler = st.session_state["Y_scaler"]
+
+            # Build a single-row dataframe in the same column order as training
+            input_df = pd.DataFrame([new_data])[feature_columns]
+
+            # Apply same label encoders used during training
+            for col, le in encoders.items():
+                input_df[col] = le.transform(input_df[col])
+
+            # Apply same scaler used during training
+            input_scaled = scalar.transform(input_df)
+            input_t = torch.tensor(input_scaled, dtype=torch.float32)
+
+            model.eval()
+            with torch.no_grad():
+                pred_scaled = model(input_t).squeeze()
+                pred_salary = Y_scaler.inverse_transform(
+                    pred_scaled.numpy().reshape(-1, 1)
+                )
+
+            st.success(f"### Predicted Salary: {pred_salary.flatten()[0]:,.0f}")
+
+else:
+    st.info("Apload your CSV file before start.")
